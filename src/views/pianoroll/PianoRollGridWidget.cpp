@@ -187,11 +187,14 @@ void PianoRollGridWidget::setProject(Project* project)
             connect(clip, &Clip::changed, this, [this](){ update(); });
             connect(clip, &Clip::noteAdded, this, [this, connectNote](Note* note) {
                 connectNote(note);
+                startNoteAnim(note, NoteAnim::PopIn);
                 update();
             });
             connect(clip, &Clip::noteRemoved, this, [this](Note* note){
                 if (m_selectedNote == note) m_selectedNote = nullptr;
                 if (m_selectedNotes.contains(note)) m_selectedNotes.removeAll(note);
+                
+                startNoteAnim(note, NoteAnim::FadeOut);
                 update();
             });
             
@@ -246,12 +249,23 @@ void PianoRollGridWidget::setActiveClip(Clip* clip)
 
 void PianoRollGridWidget::startNoteAnim(Note* note, NoteAnim::Type type)
 {
+    if (!note) return;
+
     NoteAnim anim;
     anim.startMs = m_animClock.elapsed();
     anim.progress = 0.0f;
     anim.type = type;
     m_noteAnims[note] = anim;
     
+    if (type == NoteAnim::FadeOut) {
+        if (!m_fadingNotes.contains(note)) {
+            m_fadingNotes.append(note);
+        }
+    } else {
+        // PopIn などの場合は退避リストから除去（再追加された場合など）
+        m_fadingNotes.removeAll(note);
+    }
+
     if (!m_animTimer.isActive()) {
         m_animTimer.start();
     }
@@ -295,6 +309,7 @@ void PianoRollGridWidget::tickAnimations()
     
     for (Note* n : toRemove) {
         m_noteAnims.remove(n);
+        m_fadingNotes.removeAll(n);
     }
     
     // バースト共通エンジンで更新

@@ -80,9 +80,10 @@ private:
     struct NoteAnim {
         qint64 startMs;
         float progress;
-        enum Type { PopIn, SelectGlow } type;
+        enum Type { PopIn, SelectGlow, FadeOut } type;
     };
     QMap<Note*, NoteAnim> m_noteAnims;
+    QList<Note*> m_fadingNotes;         // 削除済みだがフェードアウト中のノート
     QElapsedTimer m_animClock;
     QTimer m_animTimer;
     Note* m_prevSelectedNote;

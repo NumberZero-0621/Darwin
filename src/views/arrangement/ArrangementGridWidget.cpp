@@ -51,11 +51,7 @@ void ArrangementGridWidget::setProject(Project* project)
 {
     m_project = project;
     
-    auto updateSize = [this]() {
-        updateDynamicSize();
-    };
-
-    connect(m_project, &Project::trackAdded, this, [this, updateSize](Track* track) {
+    auto setupTrack = [this](Track* track) {
         auto connectClip = [this](Clip* clip) {
             connect(clip, &Clip::changed, this, [this](){ update(); });
             connect(clip, &Clip::noteAdded, this, [this](Note* note) {
@@ -70,40 +66,37 @@ void ArrangementGridWidget::setProject(Project* project)
 
         connect(track, &Track::clipAdded, this, [this, connectClip](Clip* clip){ 
             connectClip(clip);
+            startClipAnim(clip->id(), ClipAnim::PopIn);
         });
-        connect(track, &Track::clipRemoved, this, [this](Clip*){ updateDynamicSize(); });
-        updateSize();
-    });
-    connect(m_project, &Project::trackRemoved, this, [updateSize](Track*){ updateSize(); });
-    connect(m_project, &Project::exportRangeChanged, this, [this](){ update(); });
-    connect(m_project, &Project::folderStructureChanged, this, [updateSize]() { updateSize(); });
-    
-    // 既存トラックの監視
-    for (int i = 0; i < m_project->trackCount(); ++i) {
-        Track* track = m_project->trackAt(i);
-        auto connectClip = [this](Clip* clip) {
-            connect(clip, &Clip::changed, this, [this](){ update(); });
-            connect(clip, &Clip::noteAdded, this, [this](Note* note) {
-                connect(note, &Note::changed, this, [this](){ update(); });
-                update();
-            });
-            for (Note* note : clip->notes()) {
-                connect(note, &Note::changed, this, [this](){ update(); });
-            }
-            updateDynamicSize();
-        };
+        connect(track, &Track::clipRemoved, this, [this](Clip* clip){ 
+            if (m_selectedClipId == clip->id()) m_selectedClipId = -1;
+            m_selectedClipIds.removeAll(clip->id());
 
-        connect(track, &Track::clipAdded, this, [this, connectClip](Clip* clip){ 
-            connectClip(clip);
+            // 退避してアニメーション開始
+            m_fadingClips[clip->id()] = clip;
+            startClipAnim(clip->id(), ClipAnim::FadeOut);
+            
+            updateDynamicSize(); 
         });
-        connect(track, &Track::clipRemoved, this, [this](Clip*){ updateDynamicSize(); });
-        
+
         for (Clip* clip : track->clips()) {
             connectClip(clip);
         }
-    }
+    };
+
+    connect(m_project, &Project::trackAdded, this, [this, setupTrack](Track* track) {
+        setupTrack(track);
+        updateDynamicSize();
+    });
+    connect(m_project, &Project::trackRemoved, this, [this](Track*){ updateDynamicSize(); });
+    connect(m_project, &Project::exportRangeChanged, this, [this](){ update(); });
+    connect(m_project, &Project::folderStructureChanged, this, [this]() { updateDynamicSize(); });
     
-    updateSize();
+    // 既存トラックの監視
+    for (int i = 0; i < m_project->trackCount(); ++i) {
+        setupTrack(m_project->trackAt(i));
+    }
+    updateDynamicSize();
 }
 
 double ArrangementGridWidget::pixelsPerBar() const

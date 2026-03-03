@@ -102,6 +102,7 @@ private:
         enum Type { PopIn, FadeOut, SelectPulse, BurstOut } type;
     };
     QMap<int, ClipAnim> m_clipAnims;
+    QMap<int, Clip*> m_fadingClips;     // 削除済みだがフェードアウト中のクリップ
     QElapsedTimer m_animClock;
     QTimer m_animTimer;
     int m_prevSelectedClipId;

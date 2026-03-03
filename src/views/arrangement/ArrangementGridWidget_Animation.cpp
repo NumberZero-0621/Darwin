@@ -24,6 +24,11 @@ void ArrangementGridWidget::startClipAnim(int clipId, ClipAnim::Type type)
     anim.type = type;
     m_clipAnims[clipId] = anim;
     
+    // PopIn の場合はフェードアウト用の退避リストから除去（再追加された場合など）
+    if (type != ClipAnim::FadeOut) {
+        m_fadingClips.remove(clipId);
+    }
+
     if (!m_animTimer.isActive()) {
         m_animTimer.start();
     }
@@ -272,6 +277,7 @@ void ArrangementGridWidget::tickAnimations()
     
     for (int id : toRemove) {
         m_clipAnims.remove(id);
+        m_fadingClips.remove(id);
     }
     
     // バースト共通エンジンで更新

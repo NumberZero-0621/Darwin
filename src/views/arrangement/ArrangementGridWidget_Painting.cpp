@@ -261,6 +261,73 @@ void ArrangementGridWidget::drawClips(QPainter& p)
             p.restore();
         }
     }
+
+    // ── フェードアウト中の削除済みクリップを描画 ──
+    for (auto it = m_fadingClips.begin(); it != m_fadingClips.end(); ++it) {
+        int clipId = it.key();
+        Clip* clip = it.value();
+        if (!clip) continue;
+
+        // すでにトラックに戻っている（再追加された）ならスキップ（重複描画防止）
+        bool existsInModel = false;
+        for (Track* t : visTracks) {
+            if (t->clips().contains(clip)) {
+                existsInModel = true;
+                break;
+            }
+        }
+        if (existsInModel) continue;
+
+        Track* track = qobject_cast<Track*>(clip->parent());
+        if (!track) continue;
+        int trackIdx = visibleTrackIndex(track);
+        if (trackIdx < 0) continue;
+
+        int x = static_cast<int>(clip->startTick() * pixelsPerTick());
+        int w = static_cast<int>(clip->durationTicks() * pixelsPerTick());
+        int y = trackIdx * rowHeight;
+        QRect clipRect(x, y + 10, w, rowHeight - 20);
+
+        float opacity = 0.5f; // デフォルト
+        if (m_clipAnims.contains(clipId)) {
+            const ClipAnim& anim = m_clipAnims[clipId];
+            if (anim.type == ClipAnim::FadeOut) {
+                opacity = 1.0f - anim.progress;
+            }
+        }
+
+        p.save();
+        p.setOpacity(opacity);
+        QColor trackColor = track->color();
+        p.setBrush(trackColor.lighter(140));
+        p.setPen(QPen(trackColor, 1));
+        p.drawRoundedRect(clipRect, 4, 4);
+
+        // クリップ内ノートの簡易描画（フェードアウト版）
+        if (!clip->notes().isEmpty()) {
+            QColor noteColor = trackColor.darker(120);
+            noteColor.setAlpha(150);
+            p.setPen(Qt::NoPen);
+            p.setBrush(noteColor);
+            int clipDrawX = clipRect.x() + 2;
+            int clipDrawY = clipRect.y() + 2;
+            int clipW = clipRect.width() - 4;
+            int clipH = clipRect.height() - 4;
+            qint64 clipDuration = clip->durationTicks();
+            if (clipDuration > 0) {
+                p.setClipRect(clipRect.adjusted(2,2,-2,-2));
+                for (Note* note : clip->notes()) {
+                    int noteX = clipDrawX + static_cast<int>(note->startTick() * pixelsPerTick());
+                    int noteW = qMax(2, static_cast<int>(note->durationTicks() * pixelsPerTick()));
+                    double pitchRatio = 1.0 - (static_cast<double>(note->pitch()) / 127.0);
+                    int noteH = qMax(2, clipH / 16);
+                    int noteY = clipDrawY + static_cast<int>(pitchRatio * (clipH - noteH));
+                    p.drawRect(noteX, noteY, noteW, noteH);
+                }
+            }
+        }
+        p.restore();
+    }
 }
 
 void ArrangementGridWidget::drawFolderSummary(QPainter& p, Track* folder, int y, int rowHeight)

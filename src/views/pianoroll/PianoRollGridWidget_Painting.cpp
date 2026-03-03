@@ -172,6 +172,8 @@ void PianoRollGridWidget::paintEvent(QPaintEvent *event)
                     float t = anim.progress;
                     animScale = 0.6f + 0.4f * BurstAnimation::easeOutBack(t);
                     animOpacity = BurstAnimation::easeOutCubic(t);
+                } else if (anim.type == NoteAnim::FadeOut) {
+                    animOpacity = 1.0f - anim.progress;
                 } else if (anim.type == NoteAnim::SelectGlow) {
                     float t = anim.progress;
                     glowIntensity = (1.0f - t) * 0.8f;
@@ -208,6 +210,35 @@ void PianoRollGridWidget::paintEvent(QPaintEvent *event)
             p.setBrush(noteColor);
             p.drawRoundedRect(noteRect, 2, 2);
             
+            p.restore();
+        }
+
+        // フェードアウト中の削除済みノートを描画
+        for (Note* note : m_fadingNotes) {
+            // すでに描画済み（clip->notes() にまだ含まれている）ならスキップ（連打対策）
+            if (m_activeClip->notes().contains(note)) continue;
+
+            Clip* parentClip = qobject_cast<Clip*>(note->parent());
+            if (!parentClip) continue;
+            Track* parentTrack = qobject_cast<Track*>(parentClip->parent());
+            QColor color = parentTrack ? parentTrack->color() : QColor("#888888");
+
+            int x = static_cast<int>((note->startTick() + parentClip->startTick()) * pixelsPerTick());
+            int w = static_cast<int>(note->durationTicks() * pixelsPerTick());
+            int row = pitchToRow(note->pitch());
+            int y = row * ROW_HEIGHT;
+            QRect noteRect(x, y + 2, qMax(4, w), ROW_HEIGHT - 4);
+
+            float opacity = 1.0f;
+            if (m_noteAnims.contains(note)) {
+                opacity = 1.0f - m_noteAnims[note].progress;
+            }
+
+            p.save();
+            p.setOpacity(opacity);
+            p.setPen(QPen(color.darker(120), 1));
+            p.setBrush(color);
+            p.drawRoundedRect(noteRect, 2, 2);
             p.restore();
         }
     } else if (!m_project) {
