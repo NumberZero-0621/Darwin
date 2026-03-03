@@ -47,6 +47,8 @@ public:
     // Note management (MIDIクリップ用)
     Note* addNote(int pitch, qint64 startTick, qint64 durationTicks, int velocity = 100);
     void removeNote(Note* note);
+    Note* takeNote(Note* note);      // 追加
+    void insertNote(Note* note);     // 追加
     void clearNotes();
 
     // ===== オーディオクリップ関連 =====

@@ -63,6 +63,26 @@ void Clip::removeNote(Note* note)
     }
 }
 
+Note* Clip::takeNote(Note* note)
+{
+    if (m_notes.removeOne(note)) {
+        emit noteRemoved(note);
+        emit changed();
+        return note;
+    }
+    return nullptr;
+}
+
+void Clip::insertNote(Note* note)
+{
+    if (!note) return;
+    note->setParent(this);
+    m_notes.append(note);
+    connect(note, &Note::changed, this, &Clip::changed);
+    emit noteAdded(note);
+    emit changed();
+}
+
 void Clip::clearNotes()
 {
     for (Note* note : m_notes) {

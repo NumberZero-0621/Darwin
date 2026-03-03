@@ -19,24 +19,39 @@ AddNoteCommand::AddNoteCommand(Clip* clip, int pitch, qint64 startTick,
     , m_startTick(startTick)
     , m_durationTicks(durationTicks)
     , m_velocity(velocity)
+    , m_ownsNote(false)
     , m_firstRedo(true)
 {
+}
+
+AddNoteCommand::~AddNoteCommand()
+{
+    if (m_ownsNote && m_note) {
+        delete m_note;
+    }
 }
 
 void AddNoteCommand::undo()
 {
     if (m_note && m_clip) {
-        m_clip->removeNote(m_note);
-        // removeNote は deleteLater を呼ぶので、undo後に再利用不可
-        // → redo時に新規作成する
-        m_note = nullptr;
+        m_clip->takeNote(m_note);
+        m_ownsNote = true;
     }
 }
 
 void AddNoteCommand::redo()
 {
-    if (m_clip) {
-        m_note = m_clip->addNote(m_pitch, m_startTick, m_durationTicks, m_velocity);
+    if (m_firstRedo) {
+        if (m_clip) {
+            m_note = m_clip->addNote(m_pitch, m_startTick, m_durationTicks, m_velocity);
+            m_ownsNote = false;
+        }
+        m_firstRedo = false;
+    } else {
+        if (m_clip && m_note) {
+            m_clip->insertNote(m_note);
+            m_ownsNote = false;
+        }
     }
 }
 
@@ -47,19 +62,21 @@ RemoveNoteCommand::RemoveNoteCommand(Clip* clip, Note* note,
     : QUndoCommand("Remove Note", parent)
     , m_clip(clip)
     , m_note(note)
-    , m_pitch(note->pitch())
-    , m_startTick(note->startTick())
-    , m_durationTicks(note->durationTicks())
-    , m_velocity(note->velocity())
     , m_ownsNote(false)
 {
 }
 
+RemoveNoteCommand::~RemoveNoteCommand()
+{
+    if (m_ownsNote && m_note) {
+        delete m_note;
+    }
+}
+
 void RemoveNoteCommand::undo()
 {
-    if (m_clip) {
-        // ノートを再作成して追加
-        m_note = m_clip->addNote(m_pitch, m_startTick, m_durationTicks, m_velocity);
+    if (m_clip && m_note) {
+        m_clip->insertNote(m_note);
         m_ownsNote = false;
     }
 }
@@ -67,14 +84,13 @@ void RemoveNoteCommand::undo()
 void RemoveNoteCommand::redo()
 {
     if (m_clip && m_note) {
-        m_clip->removeNote(m_note);
-        m_note = nullptr;
-        m_ownsNote = false;
+        m_clip->takeNote(m_note);
+        m_ownsNote = true;
     }
 }
 
 // ===== ノート移動コマンド =====
-
+// (既存のまま)
 MoveNoteCommand::MoveNoteCommand(Note* note, int newPitch,
                                  qint64 newStartTick, QUndoCommand* parent)
     : QUndoCommand("Move Note", parent)
@@ -177,22 +193,39 @@ AddClipCommand::AddClipCommand(Track* track, qint64 startTick,
     , m_clip(nullptr)
     , m_startTick(startTick)
     , m_durationTicks(durationTicks)
+    , m_ownsClip(false)
     , m_firstRedo(true)
 {
+}
+
+AddClipCommand::~AddClipCommand()
+{
+    if (m_ownsClip && m_clip) {
+        delete m_clip;
+    }
 }
 
 void AddClipCommand::undo()
 {
     if (m_clip && m_track) {
-        m_track->removeClip(m_clip);
-        m_clip = nullptr;
+        m_track->takeClip(m_clip);
+        m_ownsClip = true;
     }
 }
 
 void AddClipCommand::redo()
 {
-    if (m_track) {
-        m_clip = m_track->addClip(m_startTick, m_durationTicks);
+    if (m_firstRedo) {
+        if (m_track) {
+            m_clip = m_track->addClip(m_startTick, m_durationTicks);
+            m_ownsClip = false;
+        }
+        m_firstRedo = false;
+    } else {
+        if (m_track && m_clip) {
+            m_track->insertClip(m_clip);
+            m_ownsClip = false;
+        }
     }
 }
 
@@ -205,24 +238,19 @@ RemoveClipCommand::RemoveClipCommand(Track* track, Clip* clip,
     , m_clip(clip)
     , m_ownsClip(false)
 {
-    // クリップデータをシリアライズして保持（undo時に復元）
-    m_clipData = clip->toJson();
+}
+
+RemoveClipCommand::~RemoveClipCommand()
+{
+    if (m_ownsClip && m_clip) {
+        delete m_clip;
+    }
 }
 
 void RemoveClipCommand::undo()
 {
-    if (m_track) {
-        // シリアライズデータからクリップを復元
-        Clip* restored = Clip::fromJson(m_clipData, m_track);
-        m_track->clips(); // 直接追加
-        // Track::addClip相当の処理
-        // 注: Trackのclips listは公開されていないので addClip を使って再作成
-        m_clip = m_track->addClip(restored->startTick(), restored->durationTicks());
-        // ノートをコピー
-        for (const Note* note : restored->notes()) {
-            m_clip->addNote(note->pitch(), note->startTick(), note->durationTicks(), note->velocity());
-        }
-        delete restored;
+    if (m_track && m_clip) {
+        m_track->insertClip(m_clip);
         m_ownsClip = false;
     }
 }
@@ -230,9 +258,8 @@ void RemoveClipCommand::undo()
 void RemoveClipCommand::redo()
 {
     if (m_track && m_clip) {
-        m_track->removeClip(m_clip);
-        m_clip = nullptr;
-        m_ownsClip = false;
+        m_track->takeClip(m_clip);
+        m_ownsClip = true;
     }
 }
 
@@ -304,22 +331,39 @@ AddTrackCommand::AddTrackCommand(Project* project, const QString& name,
     , m_project(project)
     , m_track(nullptr)
     , m_name(name)
+    , m_ownsTrack(false)
     , m_firstRedo(true)
 {
+}
+
+AddTrackCommand::~AddTrackCommand()
+{
+    if (m_ownsTrack && m_track) {
+        delete m_track;
+    }
 }
 
 void AddTrackCommand::undo()
 {
     if (m_track && m_project) {
-        m_project->removeTrack(m_track);
-        m_track = nullptr;
+        m_project->takeTrack(m_track);
+        m_ownsTrack = true;
     }
 }
 
 void AddTrackCommand::redo()
 {
-    if (m_project) {
-        m_track = m_project->addTrack(m_name);
+    if (m_firstRedo) {
+        if (m_project) {
+            m_track = m_project->addTrack(m_name);
+            m_ownsTrack = false;
+        }
+        m_firstRedo = false;
+    } else {
+        if (m_project && m_track) {
+            m_project->insertTrack(m_track);
+            m_ownsTrack = false;
+        }
     }
 }
 
@@ -333,40 +377,19 @@ RemoveTrackCommand::RemoveTrackCommand(Project* project, Track* track,
     , m_trackIndex(project->tracks().indexOf(track))
     , m_ownsTrack(false)
 {
-    m_trackData = track->toJson();
+}
+
+RemoveTrackCommand::~RemoveTrackCommand()
+{
+    if (m_ownsTrack && m_track) {
+        delete m_track;
+    }
 }
 
 void RemoveTrackCommand::undo()
 {
-    if (m_project) {
-        // トラックをシリアライズデータから復元
-        Track* restored = Track::fromJson(m_trackData, m_project);
-        // プロジェクトにトラックを追加
-        m_track = m_project->addTrack(restored->name());
-        // 属性をコピー
-        m_track->setInstrumentName(restored->instrumentName());
-        m_track->setVisible(restored->isVisible());
-        m_track->setMuted(restored->isMuted());
-        m_track->setSolo(restored->isSolo());
-        m_track->setVolume(restored->volume());
-        m_track->setPan(restored->pan());
-        m_track->setColor(restored->color());
-
-        // プラグインを復元
-        if (restored->hasPlugin()) {
-            m_track->loadPlugin(restored->pluginInstance()->pluginPath());
-        }
-
-        // クリップを復元
-        for (const Clip* srcClip : restored->clips()) {
-            Clip* newClip = m_track->addClip(srcClip->startTick(), srcClip->durationTicks());
-            for (const Note* note : srcClip->notes()) {
-                newClip->addNote(note->pitch(), note->startTick(),
-                                note->durationTicks(), note->velocity());
-            }
-        }
-
-        delete restored;
+    if (m_project && m_track) {
+        m_project->insertTrack(m_track, m_trackIndex);
         m_ownsTrack = false;
     }
 }
@@ -374,7 +397,7 @@ void RemoveTrackCommand::undo()
 void RemoveTrackCommand::redo()
 {
     if (m_project && m_track) {
-        m_project->removeTrack(m_track);
-        m_track = nullptr;
+        m_project->takeTrack(m_track);
+        m_ownsTrack = true;
     }
 }

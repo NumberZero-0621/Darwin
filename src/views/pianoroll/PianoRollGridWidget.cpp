@@ -206,11 +206,19 @@ void PianoRollGridWidget::setActiveClip(Clip* clip)
     
     if (m_activeClip) {
         connect(m_activeClip, &Clip::changed, this, [this](){ update(); });
-        connect(m_activeClip, &Clip::noteAdded, this, [this](Note*){ update(); });
+        connect(m_activeClip, &Clip::noteAdded, this, [this](Note* note){ 
+            connect(note, &Note::changed, this, [this](){ update(); });
+            update(); 
+        });
         connect(m_activeClip, &Clip::noteRemoved, this, [this](Note* note){
             if (m_selectedNote == note) m_selectedNote = nullptr;
             update();
         });
+
+        // 既存のノートにも接続
+        for (Note* note : m_activeClip->notes()) {
+            connect(note, &Note::changed, this, [this](){ update(); });
+        }
     }
     
     update();

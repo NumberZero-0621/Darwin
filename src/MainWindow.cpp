@@ -10,6 +10,7 @@
 #include "PlaybackController.h"
 #include "ArrangementGridWidget.h"
 #include "PianoRollGridWidget.h"
+#include "commands/UndoCommands.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QLabel>
@@ -91,6 +92,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     // Undo/Redoスタックを作成
     m_undoStack = new QUndoStack(this);
+    m_undoStack->setUndoLimit(100); // 100回までUndo可能に設定
 
     m_project = new Project("Demo Project", this);
     m_project->setBpm(128.0);
@@ -279,6 +281,7 @@ void MainWindow::setupUi()
     
     // プロジェクトをComposeView全体に注入（ArrangementView + PianoRollView両方に伝播）
     composeView->setProject(m_project);
+    composeView->setUndoStack(m_undoStack);
     
     MixView* mixView = new MixView(this);
     mixView->setProject(m_project);
@@ -309,12 +312,14 @@ void MainWindow::setupUi()
     
     // Connect SourceView to Project
     connect(m_sourceView, &SourceView::loadInstrumentRequested, this, [this](const QString& instrumentName, const QString& path){
-        // Add new track immediately on main thread
+        // トラック追加はUndo/Redo対象外とする（ユーザーリクエスト）
         Track* newTrack = m_project->addTrack(instrumentName);
         if (!newTrack) {
             m_sourceView->onPluginLoaded(false, "Failed to create track");
             return;
         }
+
+        // VST3 DLL loading must run on the main thread (COM / window message pump).
 
         // VST3 DLL loading must run on the main thread (COM / window message pump).
         // Use a short delay so the overlay animation starts before the blocking load.

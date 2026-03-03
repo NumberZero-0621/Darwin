@@ -9,6 +9,7 @@ class Clip;
 class Note;
 class Project;
 class QScrollArea;
+class QUndoStack;
 
 class PianoRollGridWidget : public QWidget
 {
@@ -17,6 +18,7 @@ public:
     explicit PianoRollGridWidget(QWidget *parent = nullptr);
     
     void setScrollArea(QScrollArea* scrollArea) { m_scrollArea = scrollArea; }
+    void setUndoStack(QUndoStack* stack) { m_undoStack = stack; }
     
 signals:
     void requestSeek(qint64 tickPosition);
@@ -52,6 +54,7 @@ private:
     Clip* m_activeClip;
     Project* m_project;
     QScrollArea* m_scrollArea = nullptr;
+    QUndoStack* m_undoStack = nullptr;
     
     double m_zoomLevel;
     

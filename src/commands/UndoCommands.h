@@ -19,6 +19,7 @@ class AddNoteCommand : public QUndoCommand
 public:
     AddNoteCommand(Clip* clip, int pitch, qint64 startTick, qint64 durationTicks,
                    int velocity, QUndoCommand* parent = nullptr);
+    ~AddNoteCommand() override;     // 追加
     void undo() override;
     void redo() override;
 
@@ -31,6 +32,7 @@ private:
     qint64 m_startTick;
     qint64 m_durationTicks;
     int m_velocity;
+    bool m_ownsNote;                // 追加
     bool m_firstRedo;
 };
 
@@ -41,17 +43,14 @@ class RemoveNoteCommand : public QUndoCommand
 {
 public:
     RemoveNoteCommand(Clip* clip, Note* note, QUndoCommand* parent = nullptr);
+    ~RemoveNoteCommand() override;  // 追加
     void undo() override;
     void redo() override;
 
 private:
     Clip* m_clip;
     Note* m_note;
-    int m_pitch;
-    qint64 m_startTick;
-    qint64 m_durationTicks;
-    int m_velocity;
-    bool m_ownsNote;
+    bool m_ownsNote;                // 既存（意味を明確化）
 };
 
 /**
@@ -121,6 +120,7 @@ class AddClipCommand : public QUndoCommand
 public:
     AddClipCommand(Track* track, qint64 startTick, qint64 durationTicks,
                    QUndoCommand* parent = nullptr);
+    ~AddClipCommand() override;     // 追加
     void undo() override;
     void redo() override;
 
@@ -131,6 +131,7 @@ private:
     Clip* m_clip;
     qint64 m_startTick;
     qint64 m_durationTicks;
+    bool m_ownsClip;                // 追加
     bool m_firstRedo;
 };
 
@@ -142,14 +143,14 @@ class RemoveClipCommand : public QUndoCommand
 public:
     RemoveClipCommand(Track* track, Clip* clip,
                       QUndoCommand* parent = nullptr);
+    ~RemoveClipCommand() override;  // 追加
     void undo() override;
     void redo() override;
 
 private:
     Track* m_track;
     Clip* m_clip;
-    QJsonObject m_clipData; // シリアライズしたクリップデータ
-    bool m_ownsClip;
+    bool m_ownsClip;                // 既存
 };
 
 /**
@@ -198,6 +199,7 @@ class AddTrackCommand : public QUndoCommand
 public:
     AddTrackCommand(Project* project, const QString& name,
                     QUndoCommand* parent = nullptr);
+    ~AddTrackCommand() override;    // 追加
     void undo() override;
     void redo() override;
 
@@ -207,6 +209,7 @@ private:
     Project* m_project;
     Track* m_track;
     QString m_name;
+    bool m_ownsTrack;               // 追加
     bool m_firstRedo;
 };
 
@@ -218,13 +221,13 @@ class RemoveTrackCommand : public QUndoCommand
 public:
     RemoveTrackCommand(Project* project, Track* track,
                        QUndoCommand* parent = nullptr);
+    ~RemoveTrackCommand() override; // 追加
     void undo() override;
     void redo() override;
 
 private:
     Project* m_project;
     Track* m_track;
-    QJsonObject m_trackData;
     int m_trackIndex;
-    bool m_ownsTrack;
+    bool m_ownsTrack;               // 既存
 };

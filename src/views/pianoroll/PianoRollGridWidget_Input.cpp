@@ -3,10 +3,11 @@
  * @brief PianoRollGridWidget のマウス・キー・ホイール入力処理
  */
 #include "PianoRollGridWidget.h"
-#include "Clip.h"
-#include "Note.h"
+#include "models/Clip.h"
+#include "models/Note.h"
+#include "models/Track.h"
 #include "Project.h"
-#include "Track.h"
+#include "commands/UndoCommands.h"
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QApplication>
@@ -344,16 +345,27 @@ void PianoRollGridWidget::mouseReleaseEvent(QMouseEvent *event)
     if ((m_isDragging || m_isResizing || m_isResizingLeft) && m_activeClip && !m_selectedNotes.isEmpty()) {
         for (Note* note : m_selectedNotes) {
             if (m_isDragging) {
-                note->setStartTick(snapTick(note->startTick()));
+                qint64 finalTick = snapTick(note->startTick());
+                int finalPitch = note->pitch();
+                if (m_undoStack) {
+                    m_undoStack->push(new MoveNoteCommand(note, finalPitch, finalTick));
+                } else {
+                    note->setStartTick(finalTick);
+                }
             } else if (m_isResizingLeft) {
                 qint64 oldEnd = note->startTick() + note->durationTicks();
                 qint64 newStart = snapTick(note->startTick());
                 note->setStartTick(newStart);
                 note->setDurationTicks(qMax(static_cast<qint64>(TICKS_PER_BEAT / 4), oldEnd - newStart));
             } else if (m_isResizing) {
-                qint64 rawEnd = note->startTick() + note->durationTicks();
-                qint64 snappedEnd = snapTick(rawEnd);
-                note->setDurationTicks(qMax(static_cast<qint64>(TICKS_PER_BEAT / 4), snappedEnd - note->startTick()));
+                qint64 oldEnd = note->startTick() + note->durationTicks();
+                qint64 snappedEnd = snapTick(oldEnd);
+                qint64 newDur = qMax((qint64)1, snappedEnd - note->startTick());
+                if (m_undoStack) {
+                    m_undoStack->push(new ResizeNoteCommand(note, newDur));
+                } else {
+                    note->setDurationTicks(newDur);
+                }
             }
         }
         update();
@@ -383,7 +395,12 @@ void PianoRollGridWidget::mouseDoubleClickEvent(QMouseEvent *event)
             Track* parentTrack = qobject_cast<Track*>(m_activeClip->parent());
             if (parentTrack) baseColor = parentTrack->color();
             startBurstAnim(QRectF(noteRect), baseColor);
-            m_activeClip->removeNote(note);
+            
+            if (m_undoStack) {
+                m_undoStack->push(new RemoveNoteCommand(m_activeClip, note));
+            } else {
+                m_activeClip->removeNote(note);
+            }
             m_selectedNote = nullptr;
             m_selectedNotes.removeOne(note);
             update();
@@ -412,10 +429,20 @@ void PianoRollGridWidget::mouseDoubleClickEvent(QMouseEvent *event)
     qint64 duration = qMin(quantize, maxDuration);
     if (duration <= 0) return;
     
-    m_selectedNote = m_activeClip->addNote(pitch, startTickRel, duration, 100);
-    m_selectedNotes.clear();
-    m_selectedNotes.append(m_selectedNote);
-    startNoteAnim(m_selectedNote, NoteAnim::PopIn);
+    if (m_undoStack) {
+        m_undoStack->push(new AddNoteCommand(m_activeClip, pitch, startTickRel, duration, 100));
+        if (!m_activeClip->notes().isEmpty()) {
+            m_selectedNote = m_activeClip->notes().last();
+            m_selectedNotes.clear();
+            m_selectedNotes.append(m_selectedNote);
+            startNoteAnim(m_selectedNote, NoteAnim::PopIn);
+        }
+    } else {
+        m_selectedNote = m_activeClip->addNote(pitch, startTickRel, duration, 100);
+        m_selectedNotes.clear();
+        m_selectedNotes.append(m_selectedNote);
+        startNoteAnim(m_selectedNote, NoteAnim::PopIn);
+    }
     update();
 }
 
@@ -552,7 +579,11 @@ void PianoRollGridWidget::keyPressEvent(QKeyEvent *event)
                 int ny = pitchToRow(note->pitch()) * ROW_HEIGHT;
                 QRect noteRect(nx, ny + 2, qMax(4, nw), ROW_HEIGHT - 4);
                 startBurstAnim(QRectF(noteRect), baseColor);
-                m_activeClip->removeNote(note);
+                if (m_undoStack) {
+                    m_undoStack->push(new RemoveNoteCommand(m_activeClip, note));
+                } else {
+                    m_activeClip->removeNote(note);
+                }
             }
             m_selectedNote = nullptr;
             m_selectedNotes.clear();

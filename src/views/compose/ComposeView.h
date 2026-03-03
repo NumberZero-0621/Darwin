@@ -28,6 +28,7 @@ public:
     explicit ComposeView(QWidget *parent = nullptr);
 
     void setProject(class Project* project);
+    void setUndoStack(class QUndoStack* stack);
 
     ArrangementView* arrangementView() const { return m_arrangementView; }
     ArrangementGridWidget* arrangementGrid() const { return m_arrangementGrid; }

@@ -6,6 +6,7 @@
 #include "models/Project.h"
 #include "models/Track.h"
 #include "models/Clip.h"
+#include "commands/UndoCommands.h"
 #include "models/Note.h"
 #include <QPainter>
 #include <QKeyEvent>
@@ -308,7 +309,12 @@ void ArrangementGridWidget::mouseReleaseEvent(QMouseEvent *event)
                 qint64 rawEnd = snapClip->startTick() + snapClip->durationTicks();
                 qint64 snappedEnd = snapTick(rawEnd);
                 qint64 newDur = snappedEnd - snapClip->startTick();
-                snapClip->setDurationTicks(qMax((qint64)TICKS_PER_BEAT, newDur));
+                qint64 finalDur = qMax((qint64)TICKS_PER_BEAT, newDur);
+                if (m_undoStack) {
+                    m_undoStack->push(new ResizeClipCommand(snapClip, finalDur));
+                } else {
+                    snapClip->setDurationTicks(finalDur);
+                }
             }
         }
     }
@@ -332,12 +338,29 @@ void ArrangementGridWidget::mouseReleaseEvent(QMouseEvent *event)
                 }
             }
             if (clipToMove) {
+                if (m_undoStack) {
+                    // トラック間移動コマンドは未実装なので注意
+                    // 現在の UndoCommands.h には MoveClipCommand (startTickのみ) しかない
+                    // とりあえず startTick の移動だけでもコマンド化する
+                    m_undoStack->push(new MoveClipCommand(clipToMove, clipToMove->startTick()));
+                }
                 Clip* taken = srcTrack->takeClip(clipToMove);
                 if (taken) {
                     dstTrack->insertClip(taken);
                     update();
                 }
             }
+        }
+    } else if (m_isDragging && m_project && m_selectedClipId != -1) {
+        // 同一トラック内の移動
+        Clip* movedClip = nullptr;
+        for (int i = 0; i < m_project->trackCount(); ++i) {
+            for (Clip* clip : m_project->trackAt(i)->clips()) {
+                if (clip->id() == m_selectedClipId) { movedClip = clip; break; }
+            }
+        }
+        if (movedClip && m_undoStack) {
+            m_undoStack->push(new MoveClipCommand(movedClip, movedClip->startTick()));
         }
     }
     
@@ -379,7 +402,12 @@ void ArrangementGridWidget::mouseDoubleClickEvent(QMouseEvent *event)
                     emit clipSelected(nullptr);
                 }
                 startBurstAnim(QRectF(clipRect), track->color(), trackIndex);
-                track->removeClip(clip);
+                
+                if (m_undoStack) {
+                    m_undoStack->push(new RemoveClipCommand(track, clip));
+                } else {
+                    track->removeClip(clip);
+                }
                 update();
                 return;
             }
@@ -391,10 +419,21 @@ void ArrangementGridWidget::mouseDoubleClickEvent(QMouseEvent *event)
         
         qint64 durationTicks = TICKS_PER_BAR;
         
-        Clip* clip = track->addClip(startTick, durationTicks);
-        m_selectedClipId = clip->id();
-        startClipAnim(clip->id(), ClipAnim::PopIn);
-        emit clipSelected(clip);
+        if (m_undoStack) {
+            m_undoStack->push(new AddClipCommand(track, startTick, durationTicks));
+            // push後の最新のクリップを取得
+            if (!track->clips().isEmpty()) {
+                Clip* clip = track->clips().last();
+                m_selectedClipId = clip->id();
+                startClipAnim(clip->id(), ClipAnim::PopIn);
+                emit clipSelected(clip);
+            }
+        } else {
+            Clip* clip = track->addClip(startTick, durationTicks);
+            m_selectedClipId = clip->id();
+            startClipAnim(clip->id(), ClipAnim::PopIn);
+            emit clipSelected(clip);
+        }
         update();
     }
 }
@@ -512,7 +551,11 @@ void ArrangementGridWidget::keyPressEvent(QKeyEvent *event)
                         int cw = static_cast<int>(clip->durationTicks() * pixelsPerTick());
                         QRect clipRect(cx, yTrack + 10, cw, rowHeight - 20);
                         startBurstAnim(QRectF(clipRect), track->color(), i);
-                        track->removeClip(clip);
+                        if (m_undoStack) {
+                            m_undoStack->push(new RemoveClipCommand(track, clip));
+                        } else {
+                            track->removeClip(clip);
+                        }
                         m_selectedClipId = -1;
                         emit clipSelected(nullptr);
                         update();

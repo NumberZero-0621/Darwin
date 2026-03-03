@@ -80,6 +80,30 @@ void Project::removeTrack(Track* track)
     }
 }
 
+Track* Project::takeTrack(Track* track)
+{
+    if (m_tracks.removeOne(track)) {
+        emit trackRemoved(track);
+        emit modified();
+        return track;
+    }
+    return nullptr;
+}
+
+void Project::insertTrack(Track* track, int index)
+{
+    if (!track) return;
+    track->setParent(this);
+    if (index < 0 || index > m_tracks.size()) {
+        m_tracks.append(track);
+    } else {
+        m_tracks.insert(index, track);
+    }
+    connect(track, &Track::propertyChanged, this, &Project::modified);
+    emit trackAdded(track);
+    emit modified();
+}
+
 void Project::clearTracks()
 {
     for (Track* track : m_tracks) {

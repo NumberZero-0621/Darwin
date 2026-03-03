@@ -41,6 +41,8 @@ public:
     Track* addTrack(const QString& name = QString());
     Track* addFolderTrack(const QString& name = QString());
     void removeTrack(Track* track);
+    Track* takeTrack(Track* track);                      // 追加
+    void insertTrack(Track* track, int index = -1);     // 追加
     void clearTracks();
     Track* trackAt(int index) const;
     Track* trackById(int id) const;

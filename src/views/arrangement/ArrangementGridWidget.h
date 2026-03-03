@@ -15,6 +15,7 @@
 class Project;
 class Track;
 class Clip;
+class QUndoStack;
 
 class QScrollArea;
 
@@ -26,6 +27,7 @@ public:
     QSize sizeHint() const override;
     
     void setProject(Project* project);
+    void setUndoStack(QUndoStack* stack) { m_undoStack = stack; }
     void setScrollArea(QScrollArea* scrollArea) { m_scrollArea = scrollArea; }
     void updateDynamicSize();
 
@@ -157,6 +159,7 @@ private:
     void ensurePlayheadVisible();
 
     QScrollArea* m_scrollArea = nullptr;
+    QUndoStack* m_undoStack = nullptr;
     double m_zoomLevel = 1.0;   // ズーム倍率 (0.25x 〜 4.0x)
     static constexpr int MIN_BARS = 64;
 };

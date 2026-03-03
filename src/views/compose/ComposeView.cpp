@@ -57,6 +57,16 @@ void ComposeView::setProject(Project* project)
     }
 }
 
+void ComposeView::setUndoStack(QUndoStack* stack)
+{
+    if (m_arrangementGrid) {
+        m_arrangementGrid->setUndoStack(stack);
+    }
+    if (m_pianoRollGrid) {
+        m_pianoRollGrid->setUndoStack(stack);
+    }
+}
+
 void ComposeView::onTrackSelected(Track* track)
 {
     // 別トラックへの切り替え時は既存エディタを閉じる
