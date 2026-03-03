@@ -179,15 +179,48 @@ void PianoRollGridWidget::setProject(Project* project)
     m_project = project;
     
     if (m_project) {
-        // 既存トラックのプロパティ変更（表示/非表示など）を監視
+        auto connectNote = [this](Note* note) {
+            connect(note, &Note::changed, this, QOverload<>::of(&PianoRollGridWidget::update));
+        };
+
+        auto connectClip = [this, connectNote](Clip* clip) {
+            connect(clip, &Clip::changed, this, QOverload<>::of(&PianoRollGridWidget::update));
+            connect(clip, &Clip::noteAdded, this, [this, connectNote](Note* note) {
+                connectNote(note);
+                update();
+            });
+            connect(clip, &Clip::noteRemoved, this, [this](Note*){ update(); });
+            
+            for (Note* note : clip->notes()) {
+                connectNote(note);
+            }
+        };
+
+        auto connectTrack = [this, connectClip](Track* track) {
+            connect(track, &Track::propertyChanged, this, QOverload<>::of(&PianoRollGridWidget::update));
+            connect(track, &Track::clipAdded, this, [this, connectClip](Clip* clip) {
+                connectClip(clip);
+                update();
+            });
+            connect(track, &Track::clipRemoved, this, [this](Clip*){ update(); });
+
+            for (Clip* clip : track->clips()) {
+                connectClip(clip);
+            }
+        };
+
+        // 既存トラックの監視
         for (Track* track : m_project->tracks()) {
-            connect(track, &Track::propertyChanged, this, [this](){ update(); });
+            connectTrack(track);
         }
+
         // 新規トラック追加時にも接続
-        connect(m_project, &Project::trackAdded, this, [this](Track* track){
-            connect(track, &Track::propertyChanged, this, [this](){ update(); });
+        connect(m_project, &Project::trackAdded, this, [this, connectTrack](Track* track){
+            connectTrack(track);
             update();
         });
+        
+        connect(m_project, &Project::trackRemoved, this, [this](Track*){ update(); });
     }
     
     update();
