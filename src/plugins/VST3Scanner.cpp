@@ -4,12 +4,13 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QDebug>
-#include <QLibrary>
 #include <QFileInfo>
+#include <QLibrary>
 
 // VST3 SDK Interfaces
 #ifdef Q_OS_WIN
 #define SMTG_OS_WINDOWS 1
+#include <windows.h>
 #endif
 
 #ifndef STDMETHODCALLTYPE
@@ -27,6 +28,238 @@
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
+
+// ============================================================
+// VST3 DLL 安全ロードヘルパー
+//
+// 【MSVC ビルド】
+//   Windows SEH (__try/__except) でアクセス違反を捕捉する。
+//   __try ブロック内に C++ デストラクタを持つオブジェクトは置けないため、
+//   POD 型・raw ポインタのみ使用し、COM インタフェースを直接操作する。
+//
+// 【MinGW/GCC ビルド】
+//   SEH が利用できないため QLibrary + try/catch(...) を使用する。
+//   ハードウェア例外（アクセス違反）の捕捉は不完全だが、
+//   C++ 例外・ロード失敗は安全にハンドリングする。
+// ============================================================
+
+#ifdef Q_OS_WIN
+#ifdef _MSC_VER
+// ──────────────────────────────────────────
+// MSVC: SEH 保護付きローダー
+// ──────────────────────────────────────────
+
+/** DLL から抽出したプラグイン生情報 (POD 型のみ — SEH 制約) */
+struct PluginRawInfo {
+    bool success     = false;
+    char name[256]   = {};
+    char vendor[256] = {};
+    char version[256]= {};
+    char category[64]= {};
+    bool isInstrument= false;
+    bool isEffect    = false;
+};
+
+/**
+ * @brief VST3 DLL をロードしプラグイン情報を SEH 保護下で取得する
+ * @param binPathW DLL の絶対パス (wchar_t)
+ */
+static PluginRawInfo extractPluginInfoSafe(const wchar_t* binPathW)
+{
+    PluginRawInfo out;
+
+    // LOAD_WITH_ALTERED_SEARCH_PATH: DLL 依存関係を DLL と同じフォルダから優先解決
+    HMODULE hLib = LoadLibraryExW(binPathW, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!hLib) {
+        qWarning() << "VST3スキャン: LoadLibrary 失敗 -"
+                   << QString::fromWCharArray(binPathW);
+        return out;
+    }
+
+    typedef IPluginFactory* (STDMETHODCALLTYPE *GetFactoryProc)();
+    GetFactoryProc getFactory = reinterpret_cast<GetFactoryProc>(
+        GetProcAddress(hLib, "GetPluginFactory"));
+
+    if (getFactory) {
+        // ─── __try/__except: アクセス違反・不正メモリアクセスをここでキャッチ ───
+        // C++ デストラクタを持つオブジェクトはこのブロック内では使用不可
+        __try {
+            IPluginFactory* factory = getFactory();
+            if (factory) {
+                // ベンダー情報取得
+                PFactoryInfo factoryInfo = {};
+                if (factory->getFactoryInfo(&factoryInfo) == kResultOk) {
+                    strncpy_s(out.vendor, sizeof(out.vendor),
+                              factoryInfo.vendor, _TRUNCATE);
+                }
+
+                // IPluginFactory2 を直接 queryInterface で取得
+                // (FUnknownPtr はデストラクタを持つため __try 内では使用不可)
+                IPluginFactory2* factory2 = nullptr;
+                TUID iid2;
+                memcpy(iid2, IPluginFactory2::iid, sizeof(TUID));
+                if (factory->queryInterface(iid2,
+                        reinterpret_cast<void**>(&factory2)) == kResultOk
+                    && factory2)
+                {
+                    const int32 classCount = factory2->countClasses();
+                    for (int32 i = 0; i < classCount; ++i) {
+                        PClassInfo2 ci = {};
+                        if (factory2->getClassInfo2(i, &ci) != kResultOk) continue;
+
+                        // カテゴリ判定
+                        const bool inst =
+                            strstr(ci.subCategories, "Instrument") ||
+                            strstr(ci.subCategories, "Synth")      ||
+                            strstr(ci.subCategories, "Sampler")    ||
+                            strstr(ci.category,      "Instrument") ||
+                            strstr(ci.category,      "Synth");
+
+                        if (inst) {
+                            out.isInstrument = true;
+                            strncpy_s(out.category, sizeof(out.category),
+                                      "Instrument", _TRUNCATE);
+                        }
+                        if (strstr(ci.subCategories, "Fx") ||
+                            strstr(ci.category,      "Fx")) {
+                            out.isEffect = true;
+                            if (!out.isInstrument)
+                                strncpy_s(out.category, sizeof(out.category),
+                                          "Fx", _TRUNCATE);
+                        }
+                        // どちらでもない場合はエフェクト扱い (フォールバック)
+                        if (!out.isInstrument && !out.isEffect)
+                            out.isEffect = true;
+
+                        // プラグイン名 (両端スペースをトリム)
+                        const char* nm = ci.name;
+                        size_t start   = 0;
+                        size_t len     = strnlen_s(nm, sizeof(ci.name));
+                        while (start < len && nm[start] == ' ')    ++start;
+                        size_t end = len;
+                        while (end > start && nm[end - 1] == ' ')  --end;
+                        const size_t trimLen = end - start;
+                        if (trimLen > 0 && trimLen < sizeof(out.name)) {
+                            memcpy(out.name, nm + start, trimLen);
+                            out.name[trimLen] = '\0';
+                        }
+
+                        // バージョン
+                        if (out.version[0] == '\0' && ci.version[0] != '\0')
+                            strncpy_s(out.version, sizeof(out.version),
+                                      ci.version, _TRUNCATE);
+                    }
+                    factory2->release();
+                }
+                factory->release();
+                out.success = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            qWarning() << "VST3スキャン: プラグイン DLL がクラッシュしました。スキップします。"
+                       << QString::fromWCharArray(binPathW);
+        }
+    }
+
+    FreeLibrary(hLib);
+    return out;
+}
+
+#else // !_MSC_VER (MinGW/GCC)
+// ──────────────────────────────────────────
+// MinGW/GCC: QLibrary + try/catch によるベストエフォート保護
+// ハードウェア例外（アクセス違反）は捕捉できないが、
+// C++ 例外およびロード失敗は安全に処理する。
+// ──────────────────────────────────────────
+
+struct PluginRawInfo {
+    bool success      = false;
+    QString name;
+    QString vendor;
+    QString version;
+    QString category;
+    bool isInstrument = false;
+    bool isEffect     = false;
+};
+
+static PluginRawInfo extractPluginInfoSafe(const QString& binPath)
+{
+    PluginRawInfo out;
+
+    QLibrary lib(binPath);
+    if (!lib.load()) {
+        qWarning() << "VST3スキャン: ライブラリロード失敗 -" << binPath;
+        return out;
+    }
+
+    typedef IPluginFactory* (STDMETHODCALLTYPE *GetFactoryProc)();
+    GetFactoryProc getFactory = reinterpret_cast<GetFactoryProc>(
+        lib.resolve("GetPluginFactory"));
+
+    if (getFactory) {
+        try {
+            IPluginFactory* factory = getFactory();
+            if (factory) {
+                // ベンダー情報取得
+                PFactoryInfo factoryInfo = {};
+                if (factory->getFactoryInfo(&factoryInfo) == kResultOk)
+                    out.vendor = QString::fromUtf8(factoryInfo.vendor);
+
+                // IPluginFactory2 によるクラス情報取得
+                // FUnknownPtr を使うと factory->release() 後にデストラクタが
+                // 解放済みポインタを参照する危険があるため、先にスコープを閉じる
+                {
+                    FUnknownPtr<IPluginFactory2> factory2(factory);
+                    if (factory2) {
+                        const int32 classCount = factory2->countClasses();
+                        for (int32 i = 0; i < classCount; ++i) {
+                            PClassInfo2 ci = {};
+                            if (factory2->getClassInfo2(i, &ci) != kResultOk) continue;
+
+                            const QString cat  = QString::fromUtf8(ci.category);
+                            const QString sub  = QString::fromUtf8(ci.subCategories);
+                            const QString nm   = QString::fromUtf8(ci.name).trimmed();
+                            const QString ver  = QString::fromUtf8(ci.version);
+
+                            const bool inst =
+                                cat.contains("Instrument", Qt::CaseInsensitive) ||
+                                cat.contains("Synth",      Qt::CaseInsensitive) ||
+                                sub.contains("Instrument", Qt::CaseInsensitive) ||
+                                sub.contains("Synth",      Qt::CaseInsensitive) ||
+                                sub.contains("Sampler",    Qt::CaseInsensitive);
+
+                            if (inst) {
+                                out.isInstrument = true;
+                                out.category     = "Instrument";
+                            }
+                            if (cat.contains("Fx", Qt::CaseInsensitive) ||
+                                sub.contains("Fx", Qt::CaseInsensitive)) {
+                                out.isEffect = true;
+                                if (out.category.isEmpty()) out.category = "Fx";
+                            }
+                            if (!out.isInstrument && !out.isEffect)
+                                out.isEffect = true; // フォールバック
+
+                            if (!nm.isEmpty())          out.name    = nm;
+                            if (out.version.isEmpty())  out.version = ver;
+                        }
+                        // factory2 をここで確実に解放してから factory->release() へ
+                    } // FUnknownPtr<IPluginFactory2> のデストラクタ実行
+                }
+                factory->release();
+                out.success = true;
+            }
+        } catch (...) {
+            qWarning() << "VST3スキャン: プラグイン処理中に C++ 例外が発生しました。スキップします。"
+                       << binPath;
+        }
+    }
+
+    lib.unload();
+    return out;
+}
+
+#endif // _MSC_VER
+#endif // Q_OS_WIN
 
 VST3Scanner::VST3Scanner(QObject* parent)
     : QObject(parent)
@@ -136,116 +369,74 @@ VST3PluginInfo VST3Scanner::parseVST3Bundle(const QString& path)
 {
     VST3PluginInfo info;
     info.path = path;
-    info.isInstrument = false;
-    info.isEffect = false;
-    
+
     QFileInfo fileInfo(path);
-    info.name = fileInfo.baseName(); // Default name
-    
-    // Determine the actual binary path
+    info.name = fileInfo.baseName(); // デフォルト名 (情報取得失敗時のフォールバック)
+
+    // --- バイナリパスの決定 ---
     QString binPath = path;
     if (fileInfo.isDir()) {
-        // It's a bundle, find the binary
+        // バンドル形式: Contents/x86_64-win/<name>.vst3 にDLLがある
 #ifdef Q_OS_WIN
-        QString subPath = "/Contents/x86_64-win/" + info.name + ".vst3";
+        const QString subPath = "/Contents/x86_64-win/" + info.name + ".vst3";
         binPath = path + subPath;
         if (!QFile::exists(binPath)) {
-             // Try to find any .vst3 file in the architecture folder
-             QDir archDir(path + "/Contents/x86_64-win");
-             QStringList entries = archDir.entryList(QStringList() << "*.vst3", QDir::Files);
-             if (!entries.isEmpty()) {
-                 binPath = archDir.absoluteFilePath(entries.first());
-             } else {
-                 return info; // Failed to find binary
-             }
+            QDir archDir(path + "/Contents/x86_64-win");
+            const QStringList entries = archDir.entryList(
+                QStringList() << "*.vst3", QDir::Files);
+            if (!entries.isEmpty()) {
+                binPath = archDir.absoluteFilePath(entries.first());
+            } else {
+                qWarning() << "VST3スキャン: バイナリが見つかりません -" << path;
+                return info;
+            }
         }
 #else
-        // Mac/Linux logic
-        return info; 
+        return info; // Mac/Linux は未実装
 #endif
     }
-    
-    // Load Library
-    QLibrary lib(binPath);
-    if (!lib.load()) {
-        // Handle failure?
+
+#ifdef Q_OS_WIN
+    // --- SEH / QLibrary 保護下で DLL 情報を取得 ---
+#ifdef _MSC_VER
+    const std::wstring binPathW = binPath.toStdWString();
+    const PluginRawInfo raw = extractPluginInfoSafe(binPathW.c_str());
+
+    if (!raw.success) {
+        // ロード失敗またはクラッシュ検出: ファイル名だけ返す
         return info;
     }
-    
-    typedef IPluginFactory* (STDMETHODCALLTYPE *GetFactoryProc)();
-    GetFactoryProc getFactory = (GetFactoryProc)lib.resolve("GetPluginFactory");
-    
-    if (getFactory) {
-        IPluginFactory* factory = getFactory();
-        if (factory) {
-            // Get Factory Info
-            PFactoryInfo factoryInfo;
-            if (factory->getFactoryInfo(&factoryInfo) == kResultOk) {
-                info.vendor = QString::fromUtf8(factoryInfo.vendor);
-            }
-            
-            // クラス情報の確認
-            FUnknownPtr<IPluginFactory2> factory2(factory);
-            if (factory2) {
-                int32 classCount = factory2->countClasses();
-                for (int32 i = 0; i < classCount; ++i) {
-                    PClassInfo2 classInfo;
-                    if (factory2->getClassInfo2(i, &classInfo) == kResultOk) {
-                        QString category = QString::fromUtf8(classInfo.category);
-                        QString name = QString::fromUtf8(classInfo.name);
-                        QString subCategories = QString::fromUtf8(classInfo.subCategories);
-                        QString version = QString::fromUtf8(classInfo.version);
 
-                        if (!version.isEmpty() && info.version.isEmpty()) {
-                            info.version = version;
-                        }
+    // 取得結果を VST3PluginInfo に変換 (MSVC: char バッファ → QString)
+    if (raw.name[0] != '\0')     info.name     = QString::fromUtf8(raw.name);
+    if (raw.vendor[0] != '\0')   info.vendor   = QString::fromUtf8(raw.vendor);
+    if (raw.version[0] != '\0')  info.version  = QString::fromUtf8(raw.version);
+    if (raw.category[0] != '\0') info.category = QString::fromUtf8(raw.category);
+    info.isInstrument = raw.isInstrument;
+    info.isEffect     = raw.isEffect;
+#else
+    // MinGW: PluginRawInfo は QString メンバーを持つ
+    const PluginRawInfo raw = extractPluginInfoSafe(binPath);
 
-                        // カテゴリ判定
-                        bool isInst = false;
-                        if (category.contains("Instrument", Qt::CaseInsensitive) || subCategories.contains("Instrument", Qt::CaseInsensitive)) {
-                            isInst = true;
-                            info.category = "Instrument";
-                        } else if (category.contains("Synth", Qt::CaseInsensitive) || subCategories.contains("Synth", Qt::CaseInsensitive)) {
-                             isInst = true;
-                             info.category = "Instrument";
-                        } else if (category.contains("Sampler", Qt::CaseInsensitive) || subCategories.contains("Sampler", Qt::CaseInsensitive)) {
-                             isInst = true;
-                             info.category = "Instrument";
-                        }
-
-                        if (isInst) {
-                            info.isInstrument = true;
-                        }
-
-                        // エフェクト判定
-                        if (category.contains("Fx", Qt::CaseInsensitive) || subCategories.contains("Fx", Qt::CaseInsensitive)) {
-                            info.isEffect = true;
-                            if (info.category.isEmpty()) info.category = "Fx";
-                        }
-
-                        // インストルメント・エフェクトどちらでもない場合のフォールバック
-                        if (!info.isInstrument && !info.isEffect) {
-                            info.isEffect = true;
-                        }
-
-                        if (info.isInstrument || info.isEffect) {
-                            const QString trimmedName = name.trimmed();
-                            if (!trimmedName.isEmpty()) {
-                                info.name = trimmedName;
-                            }
-                            qDebug() << "VSTScanner:" << info.name << "Inst:" << info.isInstrument << "FX:" << info.isEffect;
-                        }
-                    }
-                }
-            }
-            // VST3のCOMライクな参照カウントを解放。
-            // これを忝れると、その後のlib.unload()時に
-            // FUnknownPtrのデストラクタが解放済メモリを参照しクラッシュする。
-            factory->release();
-        }
+    if (!raw.success) {
+        return info;
     }
 
-    lib.unload();
+    if (!raw.name.isEmpty())    info.name     = raw.name;
+    if (!raw.vendor.isEmpty())  info.vendor   = raw.vendor;
+    if (!raw.version.isEmpty()) info.version  = raw.version;
+    if (!raw.category.isEmpty())info.category = raw.category;
+    info.isInstrument = raw.isInstrument;
+    info.isEffect     = raw.isEffect;
+#endif // _MSC_VER
+
+    qDebug() << "VST3スキャン:" << info.name
+             << "Inst:" << info.isInstrument
+             << "FX:"   << info.isEffect;
+#else
+    Q_UNUSED(binPath)
+#endif // Q_OS_WIN
+
     return info;
 }
 
