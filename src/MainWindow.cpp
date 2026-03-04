@@ -24,6 +24,7 @@
 #include <QProgressDialog>
 #include <QApplication>
 #include <QToolButton>
+#include "ExportProgressDialog.h"
 #include <QFile>
 #include <QSvgRenderer>
 #include <QPainter>
@@ -824,8 +825,26 @@ void MainWindow::saveProjectAs()
 void MainWindow::exportAudio()
 {
     // エクスポート先ファイルを選択
+    QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                         + "/Darwin/Projects";
+    QDir().mkpath(defaultDir);
+
+    QString defaultName;
+    if (m_project) {
+        QString fp = m_project->currentFilePath();
+        if (!fp.isEmpty()) {
+            defaultName = QFileInfo(fp).completeBaseName();
+        } else {
+            defaultName = m_project->name();
+        }
+    } else {
+        defaultName = "Untitled";
+    }
+    
+    QString defaultPath = defaultDir + "/" + defaultName + ".wav";
+
     QString filePath = QFileDialog::getSaveFileName(
-        this, "オーディオエクスポート", QString(),
+        this, "オーディオエクスポート", defaultPath,
         "WAV ファイル (*.wav);;全てのファイル (*)");
     if (filePath.isEmpty()) return;
 
@@ -844,11 +863,7 @@ void MainWindow::exportAudio()
         rangeInfo = "オーディオをエクスポート中...";
     }
     
-    auto* progressDlg = new QProgressDialog(rangeInfo, "キャンセル", 0, 100, this);
-    progressDlg->setWindowModality(Qt::WindowModal);
-    progressDlg->setMinimumDuration(0);
-    progressDlg->setValue(0);
-    progressDlg->setAttribute(Qt::WA_DeleteOnClose);
+    auto* progressDlg = new ExportProgressDialog(rangeInfo, this);
     progressDlg->show();
 
     // エクスポート中はAudioEngine・タイマーを停止し、プラグインへの競合アクセスを防ぐ
@@ -856,8 +871,8 @@ void MainWindow::exportAudio()
 
     auto* exporter = new AudioExporter(this);
     connect(exporter, &AudioExporter::progressChanged, this, [progressDlg](double progress) {
-        if (progressDlg && !progressDlg->wasCanceled()) {
-            progressDlg->setValue(static_cast<int>(progress * 100));
+        if (progressDlg) {
+            progressDlg->setProgress(progress);
         }
     });
 
@@ -870,7 +885,7 @@ void MainWindow::exportAudio()
         exporter->deleteLater();
         
         if (progressDlg) {
-            progressDlg->reset(); // reset() closes the dialog based on its properties
+            progressDlg->accept(); // close dialog
         }
 
         // デッドロック回避: AudioEngine・タイマーの再開前に完了メッセージを表示する

@@ -482,6 +482,16 @@ classDiagram
         #bool eventFilter(QObject*, QEvent*)
     }
 
+    class ExportProgressDialog {
+        -double m_progress
+        -QString m_infoText
+        -double m_animatedProgress
+        +ExportProgressDialog(QString, QWidget*)
+        +void setProgress(double)
+        +void setInfoText(QString)
+        #void paintEvent(QPaintEvent*)
+    }
+
     MixerChannelWidget --> KnobWidget
     MixerChannelWidget --> FaderWidget
     MixerChannelWidget --> LevelMeterWidget

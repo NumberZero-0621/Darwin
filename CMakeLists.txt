@@ -75,6 +75,8 @@ add_executable(Darwin
     src/widgets/LevelMeterWidget.h
     src/widgets/BulbRaysOverlay.cpp
     src/widgets/BulbRaysOverlay.h
+    src/widgets/ExportProgressDialog.cpp
+    src/widgets/ExportProgressDialog.h
     # Models
     src/models/Note.cpp
     src/models/Note.h
